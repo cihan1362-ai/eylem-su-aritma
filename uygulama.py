@@ -12,31 +12,50 @@ st.title("💧 Eylem Su Arıtma | Akıllı Üretim ve Maliyet")
 
 # --- HAFIZA (SESSION STATE) ---
 if 'sepet' not in st.session_state:
-    # Sepet boşsa gerekli sütunlarla oluştur
     st.session_state.sepet = pd.DataFrame(columns=["Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
 
 # --- 2. DOLAR KURU VE AYARLAR ---
-@st.cache_data
+
+# DÜZELTME: ttl=600 ekledik (10 dakikada bir yeniler)
+@st.cache_data(ttl=600)
 def dolar_kuru_getir():
     try:
+        # DÜZELTME: interval="1m" ekledik (Dakikalık anlık veri çeker)
         ticker = yf.Ticker("TRY=X")
-        data = ticker.history(period="1d")
+        data = ticker.history(period="1d", interval="1m")
+        # En son dakikanın kapanış fiyatını al
         return data["Close"].iloc[-1]
     except:
+        # İnternet yoksa veya veri çekemezse varsayılan
         return 34.50 
 
+# Kuru hemen çek
 guncel_kur = dolar_kuru_getir()
 
 # Sidebar
 st.sidebar.header("⚙️ Yönetim Paneli")
-st.sidebar.info(f"💵 Canlı Kur: {guncel_kur:.2f} TL")
-manuel_kur = st.sidebar.number_input("Kur Ayarı", value=float(guncel_kur), step=0.01)
+
+# Kur bilgisini göster
+st.sidebar.info(f"💵 Canlı Kur: {guncel_kur:.4f} TL") # 4 hane gösterelim daha hassas olsun
+
+# Manuel Müdahale İmkanı
+manuel_kur = st.sidebar.number_input("Kur Ayarı", value=float(guncel_kur), format="%.4f", step=0.01)
 kdv_orani = st.sidebar.number_input("KDV Oranı (%)", value=20.0, step=1.0)
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🗑️ Sepeti Tamamen Boşalt"):
-    st.session_state.sepet = pd.DataFrame(columns=["Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
-    st.rerun()
+
+# Butonlar
+col_yenile, col_cop = st.sidebar.columns(2)
+
+with col_yenile:
+    if st.button("🔄 Kuru Yenile"):
+        st.cache_data.clear() # Hafızayı sil
+        st.rerun() # Sayfayı yenile (Yeni kur gelecek)
+
+with col_cop:
+    if st.button("🗑️ Sepeti Sil"):
+        st.session_state.sepet = pd.DataFrame(columns=["Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
+        st.rerun()
 
 # --- 3. VERİ HAZIRLIK ---
 def veri_hazirla_ve_hesapla(df):
@@ -68,7 +87,7 @@ def veri_hazirla_ve_hesapla(df):
 
 if len(SABIT_LINK) > 10:
     try:
-        df_ham = pd.read_csv(SABIT_LINK, on_bad_lines='skip') # Hatalı satırları atla
+        df_ham = pd.read_csv(SABIT_LINK, on_bad_lines='skip') 
         gerekli = ["Ürün Adı", "Tedarikçi", "Liste Fiyatı"]
         
         if all(col in df_ham.columns for col in gerekli):
@@ -109,34 +128,27 @@ if len(SABIT_LINK) > 10:
                 # EKLEME BUTONU
                 if st.button("⬇️ Seçilenleri Sepete Ekle"):
                     secilenler = edited_df[edited_df["Seç"] == True].copy()
-                    
                     if not secilenler.empty:
-                        # Seçilenleri temizle ve ADET sütunu ekle (Varsayılan 1)
                         secilenler = secilenler.drop(columns=["Seç"])
-                        secilenler["Adet"] = 1 # Varsayılan adet
-                        
-                        # Sepete ekle
+                        secilenler["Adet"] = 1 
                         st.session_state.sepet = pd.concat([st.session_state.sepet, secilenler], ignore_index=True)
-                        st.success("Ürünler sepete eklendi! Aşağıdan adetleri düzenleyebilirsin.")
+                        st.success("Ürünler sepete eklendi!")
                         st.rerun()
 
             st.divider()
 
-            # --- SEPET VE ÜRETİM HESABI (DÜZENLENEBİLİR) ---
-            st.subheader("🛒 Üretim Sepeti (Adetleri Buradan Değiştir)")
+            # --- SEPET VE ÜRETİM HESABI ---
+            st.subheader("🛒 Üretim Sepeti (Adetleri Değiştir)")
             
             if not st.session_state.sepet.empty:
-                # Sepet veri tipi düzeltme (Hata önleyici)
                 st.session_state.sepet["Adet"] = st.session_state.sepet["Adet"].astype(int)
                 st.session_state.sepet["Birim Maliyet ($+KDV)"] = st.session_state.sepet["Birim Maliyet ($+KDV)"].astype(float)
                 st.session_state.sepet["TL MALİYETİ"] = st.session_state.sepet["TL MALİYETİ"].astype(float)
 
-                # DÜZENLENEBİLİR SEPET TABLOSU
-                # num_rows="dynamic" sayesinde satır silebilirsin!
                 sepet_son_hali = st.data_editor(
                     st.session_state.sepet,
                     column_config={
-                        "Adet": st.column_config.NumberColumn("Adet", min_value=1, step=1, help="Miktarı buradan değiştir"),
+                        "Adet": st.column_config.NumberColumn("Adet", min_value=1, step=1),
                         "Ürün Adı": st.column_config.TextColumn("Ürün Adı", disabled=True),
                         "Birim Maliyet ($+KDV)": st.column_config.NumberColumn("Birim ($)", format="$%.2f", disabled=True),
                         "TL MALİYETİ": st.column_config.NumberColumn("Birim (TL)", format="₺%.2f", disabled=True),
@@ -144,31 +156,28 @@ if len(SABIT_LINK) > 10:
                     column_order=["Adet", "Ürün Adı", "Tedarikçi", "Birim Maliyet ($+KDV)", "TL MALİYETİ"],
                     hide_index=True,
                     use_container_width=True,
-                    num_rows="dynamic", # Satır ekleme/silme özelliği
+                    num_rows="dynamic",
                     key="sepet_editor"
                 )
                 
-                # Değişiklikleri hafızaya kaydet (Anlık güncelleme için)
                 st.session_state.sepet = sepet_son_hali
 
-                # --- TOPLAM HESAPLAMA ---
-                # Adet ile çarpılarak toplam hesaplanıyor
                 toplam_dolar = (st.session_state.sepet["Birim Maliyet ($+KDV)"] * st.session_state.sepet["Adet"]).sum()
                 toplam_tl = (st.session_state.sepet["TL MALİYETİ"] * st.session_state.sepet["Adet"]).sum()
                 toplam_parca = st.session_state.sepet["Adet"].sum()
 
                 st.markdown("### 📊 Toplam Maliyet Özeti")
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Toplam Parça Sayısı", f"{toplam_parca} Adet")
-                c2.metric("Toplam Maliyet ($)", f"${toplam_dolar:.2f}")
-                c3.metric("Toplam Maliyet (TL)", f"₺{toplam_tl:.2f}")
+                c1.metric("Toplam Parça", f"{toplam_parca} Adet")
+                c2.metric("Toplam ($)", f"${toplam_dolar:.2f}")
+                c3.metric("Toplam (TL)", f"₺{toplam_tl:.2f}")
 
             else:
-                st.info("Sepetiniz boş. Yukarıdan ürün seçip ekleyin.")
+                st.info("Sepetiniz boş.")
 
         else:
              st.error(f"Excel sütunları hatalı! {gerekli}")
     except Exception as e:
-        st.error(f"Beklenmeyen bir hata oluştu: {e}")
+        st.error(f"Beklenmeyen hata: {e}")
 else:
     st.warning("⚠️ Google Sheets linkini kodun içine yapıştırmayı unutma!")
