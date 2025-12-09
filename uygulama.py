@@ -1,19 +1,19 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-from thefuzz import process # Akıllı arama kütüphanesi
+from thefuzz import process
 
 # --- 1. AYARLAR VE SABİT LİNK ---
 # Google Sheets Linkini Buraya Yapıştır:
 SABIT_LINK = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTRinIbcBwFoLk6WBoNZHTd0r1xnj5NTcyf98Ipig5Ns7xm_ieb8nndmR_pU-vawHepe1Y7NkytzQF_/pub?output=csv" 
 
 st.set_page_config(page_title="Eylem Su Arıtma", page_icon="💧", layout="wide")
-st.title("💧 Eylem Su Arıtma | Akıllı Maliyet ve Teklif")
+st.title("💧 Eylem Su Arıtma | Akıllı Üretim ve Maliyet")
 
 # --- HAFIZA (SESSION STATE) ---
-# Sepetin kaybolmaması için hafıza oluşturuyoruz
 if 'sepet' not in st.session_state:
-    st.session_state.sepet = pd.DataFrame()
+    # Sepet boşsa gerekli sütunlarla oluştur
+    st.session_state.sepet = pd.DataFrame(columns=["Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
 
 # --- 2. DOLAR KURU VE AYARLAR ---
 @st.cache_data
@@ -34,13 +34,12 @@ manuel_kur = st.sidebar.number_input("Kur Ayarı", value=float(guncel_kur), step
 kdv_orani = st.sidebar.number_input("KDV Oranı (%)", value=20.0, step=1.0)
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🗑️ Sepeti ve Hafızayı Temizle"):
-    st.session_state.sepet = pd.DataFrame()
+if st.sidebar.button("🗑️ Sepeti Tamamen Boşalt"):
+    st.session_state.sepet = pd.DataFrame(columns=["Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
     st.rerun()
 
-# --- 3. VERİ HAZIRLIK VE HESAPLAMA ---
+# --- 3. VERİ HAZIRLIK ---
 def veri_hazirla_ve_hesapla(df):
-    # Temizlik
     def temizle(val):
         try:
             val = str(val).replace('$', '').replace('₺', '').replace(',', '.')
@@ -50,7 +49,6 @@ def veri_hazirla_ve_hesapla(df):
     
     df['Liste Fiyatı'] = df['Liste Fiyatı'].apply(temizle)
     
-    # Varsayılan İskontolar
     def varsayilan_iskonto(tedarikci):
         t = str(tedarikci).lower()
         if "hsc" in t: return 55.0
@@ -59,8 +57,7 @@ def veri_hazirla_ve_hesapla(df):
     
     df['İskonto (%)'] = df['Tedarikçi'].apply(varsayilan_iskonto)
     
-    # --- TÜM HESAPLAMALARI BAŞTAN YAP ---
-    # Böylece listede direkt net fiyatları görürsün
+    # Hesaplamalar
     df["Net ($)"] = df["Liste Fiyatı"] * (1 - (df["İskonto (%)"] / 100))
     df["Birim Maliyet ($+KDV)"] = df["Net ($)"] * (1 + (kdv_orani / 100))
     df["TL MALİYETİ"] = df["Birim Maliyet ($+KDV)"] * manuel_kur
@@ -71,103 +68,107 @@ def veri_hazirla_ve_hesapla(df):
 
 if len(SABIT_LINK) > 10:
     try:
-        df_ham = pd.read_csv(SABIT_LINK)
+        df_ham = pd.read_csv(SABIT_LINK, on_bad_lines='skip') # Hatalı satırları atla
         gerekli = ["Ürün Adı", "Tedarikçi", "Liste Fiyatı"]
         
         if all(col in df_ham.columns for col in gerekli):
             df_islenmis = veri_hazirla_ve_hesapla(df_ham)
             
-            # --- BÜYÜK ARAMA ALANI ---
-            st.markdown("### 🔍 Akıllı Ürün Arama")
-            arama_metni = st.text_input("Ürün Ara", placeholder="Örn: Siliphos, Membran (Hatalı yazsanız bile bulur)", label_visibility="collapsed")
+            # --- ARAMA ALANI ---
+            st.markdown("### 🔍 Ürün Bul ve Ekle")
+            arama_metni = st.text_input("Hızlı Arama", placeholder="Örn: Siliphos, Membran...", label_visibility="collapsed")
 
             gosterilecek_df = pd.DataFrame()
 
             if arama_metni:
-                # 1. AKILLI ARAMA (FUZZY SEARCH)
                 tum_urun_isimleri = df_islenmis['Ürün Adı'].astype(str).tolist()
-                
-                # En iyi eşleşenleri bul (Skor 60 üzerindeyse getir)
                 eslesenler = process.extract(arama_metni, tum_urun_isimleri, limit=20)
                 yakalanan_isimler = [x[0] for x in eslesenler if x[1] > 60]
-                
-                # Tabloyu filtrele
                 gosterilecek_df = df_islenmis[df_islenmis['Ürün Adı'].isin(yakalanan_isimler)].copy()
             else:
-                # Arama yoksa ilk 10 ürünü göster (Hepsini gösterme, kafa karışmasın)
-                gosterilecek_df = df_islenmis.head(10)
-                if not arama_metni:
-                     st.caption("💡 *Tüm listeyi görmemek için sadece arama sonuçları gösterilir. Yukarıya bir şeyler yazın.*")
+                gosterilecek_df = df_islenmis.head(5)
 
-            # --- ARAMA SONUÇLARI TABLOSU ---
+            # --- SEÇİM TABLOSU ---
             if not gosterilecek_df.empty:
                 gosterilecek_df.insert(0, "Seç", False)
                 
-                # Tabloyu Göster (Hesaplanmış Fiyatlarla)
                 edited_df = st.data_editor(
                     gosterilecek_df,
                     column_config={
                         "Seç": st.column_config.CheckboxColumn("Seç", default=False),
                         "Liste Fiyatı": st.column_config.NumberColumn("Liste ($)", format="$%.2f"),
-                        "İskonto (%)": st.column_config.NumberColumn("İsk. (%)", format="%d"),
-                        "Birim Maliyet ($+KDV)": st.column_config.NumberColumn("Maliyet ($)", format="$%.2f"),
-                        "TL MALİYETİ": st.column_config.NumberColumn("Maliyet (TL)", format="₺%.2f"),
+                        "İskonto (%)": st.column_config.NumberColumn("İsk.", format="%d%%"),
+                        "Birim Maliyet ($+KDV)": st.column_config.NumberColumn("Birim Maliyet ($)", format="$%.2f"),
+                        "TL MALİYETİ": st.column_config.NumberColumn("Birim Maliyet (TL)", format="₺%.2f"),
                     },
-                    disabled=["Ürün Adı", "Tedarikçi", "Liste Fiyatı", "Birim Maliyet ($+KDV)", "TL MALİYETİ"],
+                    disabled=["Ürün Adı", "Tedarikçi", "Liste Fiyatı", "Birim Maliyet ($+KDV)", "TL MALİYETİ", "İskonto (%)"],
                     hide_index=True,
                     use_container_width=True
                 )
                 
-                # EKLE BUTONU
-                col_btn, col_info = st.columns([1, 4])
-                if col_btn.button("⬇️ Seçilenleri Sepete Ekle"):
-                    secilenler = edited_df[edited_df["Seç"] == True]
+                # EKLEME BUTONU
+                if st.button("⬇️ Seçilenleri Sepete Ekle"):
+                    secilenler = edited_df[edited_df["Seç"] == True].copy()
+                    
                     if not secilenler.empty:
-                        # Seçilenleri hafızaya (session_state) ekle
-                        temiz_secilenler = secilenler.drop(columns=["Seç"]) # Seç kutusunu kaldır
-                        st.session_state.sepet = pd.concat([st.session_state.sepet, temiz_secilenler], ignore_index=True)
-                        st.success(f"{len(secilenler)} ürün sepete eklendi!")
-                        st.rerun() # Sayfayı yenile ki sepet güncellensin
-            
+                        # Seçilenleri temizle ve ADET sütunu ekle (Varsayılan 1)
+                        secilenler = secilenler.drop(columns=["Seç"])
+                        secilenler["Adet"] = 1 # Varsayılan adet
+                        
+                        # Sepete ekle
+                        st.session_state.sepet = pd.concat([st.session_state.sepet, secilenler], ignore_index=True)
+                        st.success("Ürünler sepete eklendi! Aşağıdan adetleri düzenleyebilirsin.")
+                        st.rerun()
+
             st.divider()
 
-            # --- SEPETİM (TOPLANAN ÜRÜNLER) ---
-            st.subheader("🛒 Oluşturulan Set / Sepet")
+            # --- SEPET VE ÜRETİM HESABI (DÜZENLENEBİLİR) ---
+            st.subheader("🛒 Üretim Sepeti (Adetleri Buradan Değiştir)")
             
             if not st.session_state.sepet.empty:
-                # Sepeti Göster
-                sepet_df = st.data_editor(
+                # Sepet veri tipi düzeltme (Hata önleyici)
+                st.session_state.sepet["Adet"] = st.session_state.sepet["Adet"].astype(int)
+                st.session_state.sepet["Birim Maliyet ($+KDV)"] = st.session_state.sepet["Birim Maliyet ($+KDV)"].astype(float)
+                st.session_state.sepet["TL MALİYETİ"] = st.session_state.sepet["TL MALİYETİ"].astype(float)
+
+                # DÜZENLENEBİLİR SEPET TABLOSU
+                # num_rows="dynamic" sayesinde satır silebilirsin!
+                sepet_son_hali = st.data_editor(
                     st.session_state.sepet,
                     column_config={
-                        "Liste Fiyatı": st.column_config.NumberColumn("Liste ($)", format="$%.2f"),
-                        "İskonto (%)": st.column_config.NumberColumn("İsk. (%)", format="%d"),
-                        "Birim Maliyet ($+KDV)": st.column_config.NumberColumn("Maliyet ($)", format="$%.2f"),
-                        "TL MALİYETİ": st.column_config.NumberColumn("Maliyet (TL)", format="₺%.2f"),
+                        "Adet": st.column_config.NumberColumn("Adet", min_value=1, step=1, help="Miktarı buradan değiştir"),
+                        "Ürün Adı": st.column_config.TextColumn("Ürün Adı", disabled=True),
+                        "Birim Maliyet ($+KDV)": st.column_config.NumberColumn("Birim ($)", format="$%.2f", disabled=True),
+                        "TL MALİYETİ": st.column_config.NumberColumn("Birim (TL)", format="₺%.2f", disabled=True),
                     },
-                    disabled=True, # Sepet artık salt okunur olsun
+                    column_order=["Adet", "Ürün Adı", "Tedarikçi", "Birim Maliyet ($+KDV)", "TL MALİYETİ"],
                     hide_index=True,
                     use_container_width=True,
-                    key="sepet_tablosu"
+                    num_rows="dynamic", # Satır ekleme/silme özelliği
+                    key="sepet_editor"
                 )
                 
-                # TOPLAMLAR
-                toplam_dolar = st.session_state.sepet["Birim Maliyet ($+KDV)"].sum()
-                toplam_tl = st.session_state.sepet["TL MALİYETİ"].sum()
-                adet = len(st.session_state.sepet)
+                # Değişiklikleri hafızaya kaydet (Anlık güncelleme için)
+                st.session_state.sepet = sepet_son_hali
 
+                # --- TOPLAM HESAPLAMA ---
+                # Adet ile çarpılarak toplam hesaplanıyor
+                toplam_dolar = (st.session_state.sepet["Birim Maliyet ($+KDV)"] * st.session_state.sepet["Adet"]).sum()
+                toplam_tl = (st.session_state.sepet["TL MALİYETİ"] * st.session_state.sepet["Adet"]).sum()
+                toplam_parca = st.session_state.sepet["Adet"].sum()
+
+                st.markdown("### 📊 Toplam Maliyet Özeti")
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Toplam Parça", f"{adet} Adet")
+                c1.metric("Toplam Parça Sayısı", f"{toplam_parca} Adet")
                 c2.metric("Toplam Maliyet ($)", f"${toplam_dolar:.2f}")
                 c3.metric("Toplam Maliyet (TL)", f"₺{toplam_tl:.2f}")
 
             else:
-                st.info("Sepetiniz boş. Yukarıdan ürün arayıp ekleyebilirsiniz.")
+                st.info("Sepetiniz boş. Yukarıdan ürün seçip ekleyin.")
 
         else:
-             st.error(f"Excel başlıkları hatalı! {gerekli}")
+             st.error(f"Excel sütunları hatalı! {gerekli}")
     except Exception as e:
-        st.error(f"Hata: {e}")
+        st.error(f"Beklenmeyen bir hata oluştu: {e}")
 else:
-    st.warning("⚠️ Lütfen kodun içindeki SABIT_LINK kısmına Google Sheets linkini yapıştır.")
-
-
+    st.warning("⚠️ Google Sheets linkini kodun içine yapıştırmayı unutma!")
