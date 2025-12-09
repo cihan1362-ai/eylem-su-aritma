@@ -5,7 +5,7 @@ from thefuzz import process # Akıllı arama kütüphanesi
 
 # --- 1. AYARLAR VE SABİT LİNK ---
 # Google Sheets Linkini Buraya Yapıştır:
-SABIT_LINK = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTRinIbcBwFoLk6WBoNZHTd0r1xnj5NTcyf98Ipig5Ns7xm_ieb8nndmR_pU-vawHepe1Y7NkytzQF_/pubhtml" 
+SABIT_LINK = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTRinIbcBwFoLk6WBoNZHTd0r1xnj5NTcyf98Ipig5Ns7xm_ieb8nndmR_pU-vawHepe1Y7NkytzQF_/pub?output=csv" 
 
 st.set_page_config(page_title="Eylem Su Arıtma", page_icon="💧", layout="wide")
 st.title("💧 Eylem Su Arıtma | Akıllı Maliyet ve Teklif")
@@ -169,4 +169,5 @@ if len(SABIT_LINK) > 10:
         st.error(f"Hata: {e}")
 else:
     st.warning("⚠️ Lütfen kodun içindeki SABIT_LINK kısmına Google Sheets linkini yapıştır.")
+
 
