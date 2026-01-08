@@ -12,7 +12,8 @@ st.title("💧 Eylem Su Arıtma | Akıllı Üretim ve Maliyet")
 
 # --- HAFIZA (SESSION STATE) ---
 if 'sepet' not in st.session_state:
-    st.session_state.sepet = pd.DataFrame(columns=["Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
+    # Sepeti oluştururken 'Sil' sütununu da ekliyoruz
+    st.session_state.sepet = pd.DataFrame(columns=["Sil", "Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
 
 # --- 2. DOLAR KURU VE AYARLAR ---
 @st.cache_data(ttl=600)
@@ -39,13 +40,12 @@ with col_yenile:
         st.cache_data.clear()
         st.rerun()
 with col_cop:
-    if st.button("🗑️ Sepeti Sil"):
-        st.session_state.sepet = pd.DataFrame(columns=["Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
+    if st.button("🗑️ Sepeti Sıfırla"):
+        st.session_state.sepet = pd.DataFrame(columns=["Sil", "Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
         st.rerun()
 
 # --- 3. VERİ HAZIRLIK ---
 def veri_hazirla_ve_hesapla(df):
-    # Fiyat Temizliği
     def temizle(val):
         try:
             val = str(val).replace('$', '').replace('₺', '').replace(',', '.')
@@ -56,7 +56,6 @@ def veri_hazirla_ve_hesapla(df):
     
     df['Liste Fiyatı'] = df['Liste Fiyatı'].apply(temizle)
     
-    # İskonto Belirleme
     def varsayilan_iskonto(tedarikci):
         t = str(tedarikci).lower()
         if "hsc" in t: return 55.0
@@ -65,24 +64,19 @@ def veri_hazirla_ve_hesapla(df):
     
     df['İskonto (%)'] = df['Tedarikçi'].apply(varsayilan_iskonto)
     
-    # --- YENİ KDV MANTIĞI BURADA ---
-    # Tedarikçi boşsa KDV 0, doluysa seçilen oran
+    # KDV Mantığı (Boşsa 0, Doluysa %20)
     def kdv_belirle(row):
         tedarikci = str(row['Tedarikçi']).strip().lower()
         if tedarikci == "" or tedarikci == "nan":
-            return 0.0 # Tedarikçi yoksa KDV YOK
+            return 0.0
         else:
-            return kdv_orani # Tedarikçi varsa Normal KDV
+            return kdv_orani
             
-    # Her satır için KDV oranını hesapla
     df['Uygulanan KDV'] = df.apply(kdv_belirle, axis=1)
 
-    # Matematiksel Hesaplamalar
+    # Hesaplamalar
     df["Net ($)"] = df["Liste Fiyatı"] * (1 - (df["İskonto (%)"] / 100))
-    
-    # KDV hesaplarken o satıra özel belirlenen oranı kullanıyoruz
     df["Birim Maliyet ($+KDV)"] = df["Net ($)"] * (1 + (df['Uygulanan KDV'] / 100))
-    
     df["TL MALİYETİ"] = df["Birim Maliyet ($+KDV)"] * manuel_kur
     
     return df
@@ -121,11 +115,9 @@ if len(SABIT_LINK) > 10:
                         "Seç": st.column_config.CheckboxColumn("Seç", default=False),
                         "Liste Fiyatı": st.column_config.NumberColumn("Liste ($)", format="$%.2f"),
                         "İskonto (%)": st.column_config.NumberColumn("İsk.", format="%d%%"),
-                        "Birim Maliyet ($+KDV)": st.column_config.NumberColumn("Birim Maliyet ($)", format="$%.2f"),
-                        "TL MALİYETİ": st.column_config.NumberColumn("Birim Maliyet (TL)", format="₺%.2f"),
-                        "Uygulanan KDV": st.column_config.NumberColumn("KDV %", format="%d%%"), # Kontrol için KDV sütununu da gösterelim
+                        "Birim Maliyet ($+KDV)": st.column_config.NumberColumn("Birim ($)", format="$%.2f"),
+                        "TL MALİYETİ": st.column_config.NumberColumn("Birim (TL)", format="₺%.2f"),
                     },
-                    # KDV oranını da göresin diye disabled listesinden çıkardım, istersen oradan da bakabilirsin
                     disabled=["Ürün Adı", "Tedarikçi", "Liste Fiyatı", "Birim Maliyet ($+KDV)", "TL MALİYETİ", "İskonto (%)", "Uygulanan KDV"],
                     hide_index=True,
                     use_container_width=True
@@ -136,38 +128,62 @@ if len(SABIT_LINK) > 10:
                     secilenler = edited_df[edited_df["Seç"] == True].copy()
                     if not secilenler.empty:
                         secilenler = secilenler.drop(columns=["Seç"])
-                        secilenler["Adet"] = 1 
+                        secilenler["Adet"] = 1
+                        secilenler["Sil"] = False # Varsayılan olarak silinmeyecek işaretle
+                        
+                        # Sepeti güncelle
                         st.session_state.sepet = pd.concat([st.session_state.sepet, secilenler], ignore_index=True)
-                        st.success("Ürünler sepete eklendi!")
+                        st.success("Ürünler eklendi!")
                         st.rerun()
 
             st.divider()
 
-            # --- SEPET VE ÜRETİM HESABI ---
-            st.subheader("🛒 Üretim Sepeti (Adetleri Değiştir)")
+            # --- SEPET VE ÜRETİM HESABI (SİLME ÖZELLİKLİ) ---
+            st.subheader("🛒 Üretim Sepeti (Adet Değiştir / Sil)")
             
             if not st.session_state.sepet.empty:
+                # Veri tiplerini garantiye al
                 st.session_state.sepet["Adet"] = st.session_state.sepet["Adet"].astype(int)
                 st.session_state.sepet["Birim Maliyet ($+KDV)"] = st.session_state.sepet["Birim Maliyet ($+KDV)"].astype(float)
                 st.session_state.sepet["TL MALİYETİ"] = st.session_state.sepet["TL MALİYETİ"].astype(float)
+                
+                # Eğer eski versiyondan 'Sil' sütunu yoksa ekle
+                if "Sil" not in st.session_state.sepet.columns:
+                    st.session_state.sepet["Sil"] = False
 
+                # Sütun sırasını düzenle (Sil en başta olsun)
+                sutun_sirasi = ["Sil", "Adet", "Ürün Adı", "Tedarikçi", "Birim Maliyet ($+KDV)", "TL MALİYETİ"]
+                st.session_state.sepet = st.session_state.sepet[sutun_sirasi]
+
+                # SEPET EDİTÖRÜ
                 sepet_son_hali = st.data_editor(
                     st.session_state.sepet,
                     column_config={
+                        "Sil": st.column_config.CheckboxColumn("Sil?", default=False, help="Çıkarmak için işaretle"),
                         "Adet": st.column_config.NumberColumn("Adet", min_value=1, step=1),
                         "Ürün Adı": st.column_config.TextColumn("Ürün Adı", disabled=True),
                         "Birim Maliyet ($+KDV)": st.column_config.NumberColumn("Birim ($)", format="$%.2f", disabled=True),
                         "TL MALİYETİ": st.column_config.NumberColumn("Birim (TL)", format="₺%.2f", disabled=True),
                     },
-                    column_order=["Adet", "Ürün Adı", "Tedarikçi", "Birim Maliyet ($+KDV)", "TL MALİYETİ"],
                     hide_index=True,
                     use_container_width=True,
-                    num_rows="dynamic",
                     key="sepet_editor"
                 )
                 
+                # Değişiklikleri anlık kaydet
                 st.session_state.sepet = sepet_son_hali
 
+                # SİLME BUTONU
+                # Eğer listede "Sil" işaretli bir ürün varsa butonu kırmızı göster, yoksa normal
+                silinecekler_var_mi = sepet_son_hali["Sil"].any()
+                
+                if silinecekler_var_mi:
+                    if st.button("🗑️ Seçilenleri Sepetten Çıkar", type="primary"):
+                        # Sil işaretli olmayanları tut (Yani silinenleri at)
+                        st.session_state.sepet = sepet_son_hali[sepet_son_hali["Sil"] == False]
+                        st.rerun()
+
+                # --- TOPLAM HESAPLAMA ---
                 toplam_dolar = (st.session_state.sepet["Birim Maliyet ($+KDV)"] * st.session_state.sepet["Adet"]).sum()
                 toplam_tl = (st.session_state.sepet["TL MALİYETİ"] * st.session_state.sepet["Adet"]).sum()
                 toplam_parca = st.session_state.sepet["Adet"].sum()
