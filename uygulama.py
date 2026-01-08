@@ -15,43 +15,29 @@ if 'sepet' not in st.session_state:
     st.session_state.sepet = pd.DataFrame(columns=["Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
 
 # --- 2. DOLAR KURU VE AYARLAR ---
-
-# DÜZELTME: ttl=600 ekledik (10 dakikada bir yeniler)
 @st.cache_data(ttl=600)
 def dolar_kuru_getir():
     try:
-        # DÜZELTME: interval="1m" ekledik (Dakikalık anlık veri çeker)
         ticker = yf.Ticker("TRY=X")
         data = ticker.history(period="1d", interval="1m")
-        # En son dakikanın kapanış fiyatını al
         return data["Close"].iloc[-1]
     except:
-        # İnternet yoksa veya veri çekemezse varsayılan
         return 34.50 
 
-# Kuru hemen çek
 guncel_kur = dolar_kuru_getir()
 
 # Sidebar
 st.sidebar.header("⚙️ Yönetim Paneli")
-
-# Kur bilgisini göster
-st.sidebar.info(f"💵 Canlı Kur: {guncel_kur:.4f} TL") # 4 hane gösterelim daha hassas olsun
-
-# Manuel Müdahale İmkanı
+st.sidebar.info(f"💵 Canlı Kur: {guncel_kur:.4f} TL")
 manuel_kur = st.sidebar.number_input("Kur Ayarı", value=float(guncel_kur), format="%.4f", step=0.01)
 kdv_orani = st.sidebar.number_input("KDV Oranı (%)", value=20.0, step=1.0)
 
 st.sidebar.markdown("---")
-
-# Butonlar
 col_yenile, col_cop = st.sidebar.columns(2)
-
 with col_yenile:
     if st.button("🔄 Kuru Yenile"):
-        st.cache_data.clear() # Hafızayı sil
-        st.rerun() # Sayfayı yenile (Yeni kur gelecek)
-
+        st.cache_data.clear()
+        st.rerun()
 with col_cop:
     if st.button("🗑️ Sepeti Sil"):
         st.session_state.sepet = pd.DataFrame(columns=["Ürün Adı", "Tedarikçi", "Adet", "Birim Maliyet ($+KDV)", "TL MALİYETİ"])
@@ -59,15 +45,18 @@ with col_cop:
 
 # --- 3. VERİ HAZIRLIK ---
 def veri_hazirla_ve_hesapla(df):
+    # Fiyat Temizliği
     def temizle(val):
         try:
             val = str(val).replace('$', '').replace('₺', '').replace(',', '.')
+            if val.strip() == "": return 0.0
             return float(val)
         except:
             return 0.0
     
     df['Liste Fiyatı'] = df['Liste Fiyatı'].apply(temizle)
     
+    # İskonto Belirleme
     def varsayilan_iskonto(tedarikci):
         t = str(tedarikci).lower()
         if "hsc" in t: return 55.0
@@ -76,9 +65,24 @@ def veri_hazirla_ve_hesapla(df):
     
     df['İskonto (%)'] = df['Tedarikçi'].apply(varsayilan_iskonto)
     
-    # Hesaplamalar
+    # --- YENİ KDV MANTIĞI BURADA ---
+    # Tedarikçi boşsa KDV 0, doluysa seçilen oran
+    def kdv_belirle(row):
+        tedarikci = str(row['Tedarikçi']).strip().lower()
+        if tedarikci == "" or tedarikci == "nan":
+            return 0.0 # Tedarikçi yoksa KDV YOK
+        else:
+            return kdv_orani # Tedarikçi varsa Normal KDV
+            
+    # Her satır için KDV oranını hesapla
+    df['Uygulanan KDV'] = df.apply(kdv_belirle, axis=1)
+
+    # Matematiksel Hesaplamalar
     df["Net ($)"] = df["Liste Fiyatı"] * (1 - (df["İskonto (%)"] / 100))
-    df["Birim Maliyet ($+KDV)"] = df["Net ($)"] * (1 + (kdv_orani / 100))
+    
+    # KDV hesaplarken o satıra özel belirlenen oranı kullanıyoruz
+    df["Birim Maliyet ($+KDV)"] = df["Net ($)"] * (1 + (df['Uygulanan KDV'] / 100))
+    
     df["TL MALİYETİ"] = df["Birim Maliyet ($+KDV)"] * manuel_kur
     
     return df
@@ -119,8 +123,10 @@ if len(SABIT_LINK) > 10:
                         "İskonto (%)": st.column_config.NumberColumn("İsk.", format="%d%%"),
                         "Birim Maliyet ($+KDV)": st.column_config.NumberColumn("Birim Maliyet ($)", format="$%.2f"),
                         "TL MALİYETİ": st.column_config.NumberColumn("Birim Maliyet (TL)", format="₺%.2f"),
+                        "Uygulanan KDV": st.column_config.NumberColumn("KDV %", format="%d%%"), # Kontrol için KDV sütununu da gösterelim
                     },
-                    disabled=["Ürün Adı", "Tedarikçi", "Liste Fiyatı", "Birim Maliyet ($+KDV)", "TL MALİYETİ", "İskonto (%)"],
+                    # KDV oranını da göresin diye disabled listesinden çıkardım, istersen oradan da bakabilirsin
+                    disabled=["Ürün Adı", "Tedarikçi", "Liste Fiyatı", "Birim Maliyet ($+KDV)", "TL MALİYETİ", "İskonto (%)", "Uygulanan KDV"],
                     hide_index=True,
                     use_container_width=True
                 )
